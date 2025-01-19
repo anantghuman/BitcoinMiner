@@ -29,15 +29,29 @@ int main() {
     b.append(lengthBits);
 
     int totalSize = bSize + padding + CHUNK_SIZE;
-
-    
-
-
-    
 }
-vector<uint32_t> getFirstWords(const string& binaryMessage) {
-    vector<uint32_t> words(16, 0);
 
+void extendChunks(vector<uint32_t>& W) {
+    for (int i = 16; i < 64; i++) {
+        W[i] = sigma1(W[i - 2]) + W[i - 7] + sigma0(W[i - 15]) + W[i - 16];
+    }
+}
+
+vector<vector<uint32_t>> processChunks(const string& binaryMessage) {
+    vector<vector<uint32_t>> chunkWords;  // Vector to store words for each chunk
+
+    // Process each 512-bit chunk
+    for (size_t i = 0; i < binaryMessage.size(); i += 512) {
+        string chunk = binaryMessage.substr(i, 512);  // Get the next 512-bit chunk
+        vector<uint32_t> words = getFirstWords(chunk);  // Get the first 16 words of the chunk
+        chunkWords.push_back(words);  // Add the words to the result
+    }
+
+    return chunkWords;  // Return the list of chunk words
+}
+
+vector<uint32_t> getFirstWords(const string& binaryMessage) {
+    vector<uint32_t> words(16 ,0);
     // Iterate over the first 512 bits of the message and split it into 32-bit words
     for (int i = 0; i < 16; ++i) {
         for (int j = 0; j < 32; ++j) {
@@ -75,3 +89,5 @@ uint32_t Ch(uint32_t x, uint32_t y, uint32_t z) {
 uint32_t Maj(uint32_t x, uint32_t y, uint32_t z) {
     return (x & y) ^ (x & z) ^ (y & z);
 }
+
+
