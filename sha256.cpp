@@ -5,6 +5,7 @@
 #include <string>
 
 #include "sha256Constants.hpp"
+#include "block_header.h"
 
 using namespace std;
 
@@ -20,13 +21,16 @@ uint32_t maj(array<uint32_t, 8>* hash);
 uint32_t rotateRight(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
 }
-
+block_header* pre_process(string s);
 int main() {
-    string s;
-    cin >> s;
+    string s = "abc";
+    block_header* bh = pre_process(s);
+    return 0;
+}
 
-    int n = s.size();
+block_header* pre_process(string s) {
     string b = "";
+    int n = s.size();
     int bSize = n * 8;
     int padding =
         ((BLOCK_SIZE - CHUNK_SIZE - 1) - bSize % BLOCK_SIZE + BLOCK_SIZE) %
@@ -52,10 +56,12 @@ int main() {
     array<uint32_t, 8>* hash_ptr = new array<uint32_t, 8>;
     array<uint32_t, 8>& hash = *hash_ptr;
     array<uint32_t, 8> prev_hash = INIT_HASH_VALUES;
+    block_header* bh = new block_header[numBlocks + 1];
     for (int i = 0; i < 8; i++) {
         hash[i] = INIT_HASH_VALUES[i];
-        prev_hash[i] = INIT_HASH_VALUES[i];
+        bh[0].prev_hash[i] = INIT_HASH_VALUES[i];
     }
+    
     for (int i = 0; i < numBlocks; i++) {
         // Process each block
         array<uint32_t, 64> chunk;
@@ -85,29 +91,34 @@ int main() {
             hash[0] = T1 + T2;
         }
 
-        hash[0] += prev_hash[0];
-        hash[1] += prev_hash[1];
-        hash[2] += prev_hash[2];
-        hash[3] += prev_hash[3];
-        hash[4] += prev_hash[4];
-        hash[5] += prev_hash[5];
-        hash[6] += prev_hash[6];
-        hash[7] += prev_hash[7];
-        prev_hash[0] = hash[0];
-        prev_hash[1] = hash[1];
-        prev_hash[2] = hash[2];
-        prev_hash[3] = hash[3];
-        prev_hash[4] = hash[4];
-        prev_hash[5] = hash[5];
-        prev_hash[6] = hash[6];
-        prev_hash[7] = hash[7];
+        hash[0] += bh[i].prev_hash[0];
+        hash[1] += bh[i].prev_hash[1];
+        hash[2] += bh[i].prev_hash[2];
+        hash[3] += bh[i].prev_hash[3];
+        hash[4] += bh[i].prev_hash[4];
+        hash[5] += bh[i].prev_hash[5];
+        hash[6] += bh[i].prev_hash[6];
+        hash[7] += bh[i].prev_hash[7];
+        bh[i+1].prev_hash[0] = hash[0];
+        bh[i+1].prev_hash[1] = hash[1];
+        bh[i+1].prev_hash[2] = hash[2];
+        bh[i+1].prev_hash[3] = hash[3];
+        bh[i+1].prev_hash[4] = hash[4];
+        bh[i+1].prev_hash[5] = hash[5];
+        bh[i+1].prev_hash[6] = hash[6];
+        bh[i+1].prev_hash[7] = hash[7];
+
         start += BLOCK_SIZE;
     }
+    
     string result = "";
     for (int i = 0; i < 8; i++) {
         result += bitset<32>(hash[i]).to_string();
     }
+
+    delete hash_ptr;
     cout << result << endl;
+    return bh;
 }
 
 uint32_t sigma0(uint32_t x) { return rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >> 3); }
