@@ -21,12 +21,12 @@ uint32_t maj(array<uint32_t, 8>* hash);
 uint32_t rotateRight(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
 }
-block_header* pre_process(string s);
-int main() {
-    string s = "abc";
-    block_header* bh = pre_process(s);
-    return 0;
-}
+// block_header* pre_process(string s);
+// int main() {
+//     string s = "abc";
+//     block_header* bh = pre_process(s);
+//     return 0;
+// }
 
 block_header* pre_process(string s) {
     string b = "";
@@ -119,6 +119,14 @@ block_header* pre_process(string s) {
     delete hash_ptr;
     cout << result << endl;
     return bh;
+}
+
+
+int main() {
+    string s = "abc";
+    block_header* bh = pre_process(s);
+    delete[] bh;
+    return 0;
 }
 
 uint32_t sigma0(uint32_t x) { return rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >> 3); }
