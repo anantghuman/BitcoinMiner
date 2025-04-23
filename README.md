@@ -1,2 +1,1 @@
-Bitcoin Miner in C++
-Currently debugging sha256 hashing
+Bitcoin Miner in C++ - In Progress
