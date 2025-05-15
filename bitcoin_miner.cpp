@@ -18,7 +18,12 @@ string doubleSHA256(const string &input) {
 }
 void hashblock(uint32_t nonce, uint32_t* version, char* prevhash, uint32_t* merkle_root, uint32_t* time, uint32_t* nbits, uint32_t* result) {
     string header = "";
+    uint32_t difficulty[8];
+    uint32_t bits[1];
+    
    
+
+
 
    
 }
