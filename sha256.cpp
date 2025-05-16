@@ -114,9 +114,9 @@ string sha256(string s) {
     }
     
     string result;
-    for (int i = 0; i < 8; i++) {
-        cout << bitset<32>(hash[i]).to_string();
-    }
+    // for (int i = 0; i < 8; i++) {
+    //     cout << bitset<32>(hash[i]).to_string();
+    // }
     result.reserve(32); 
     for (int i = 0; i < 8; i++) {
         uint32_t value = hash[i];
