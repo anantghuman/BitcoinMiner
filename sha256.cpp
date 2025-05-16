@@ -120,25 +120,24 @@ string sha256(string s) {
     result.reserve(32); 
     for (int i = 0; i < 8; i++) {
         uint32_t value = hash[i];
-        result += static_cast<char>((value >> 0) & 0xFF);  // 1st byte (least significant)
-        result += static_cast<char>((value >> 8) & 0xFF);  // 2nd byte
-        result += static_cast<char>((value >> 16) & 0xFF); // 3rd byte
-        result += static_cast<char>((value >> 24) & 0xFF); // 4th byte (most significant)
+        result += static_cast<char>((value >> 24) & 0xFF);  // 1st byte (least significant)
+        result += static_cast<char>((value >> 16) & 0xFF);  // 2nd byte
+        result += static_cast<char>((value >> 8) & 0xFF); // 3rd byte
+        result += static_cast<char>((value >> 0) & 0xFF); // 4th byte (most significant)
     }
-    
     
     return result;
 }
 
 
-int main() {
-    string s;
-    cout << "Enter a string: ";
-    cin >> s;
-    string str = sha256(s);
-    cout << str;
-    return 0;
-}
+// int main() {
+//     string s;
+//     cout << "Enter a string: ";
+//     cin >> s;
+//     string str = sha256(s);
+//     cout << str;
+//     return 0;
+// }
 
 uint32_t sigma0(uint32_t x) { return rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >> 3); }
 uint32_t sigma1(uint32_t x) { return rotateRight(x, 17) ^ rotateRight(x, 19) ^ (x >> 10); }
