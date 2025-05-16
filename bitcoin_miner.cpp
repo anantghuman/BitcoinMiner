@@ -47,8 +47,8 @@ int main() {
     string header = "";
     header.append(reinterpret_cast<const char*>(&version), 4)
             .append(reinterpret_cast<const char*>(prevhash), 32)
-            .append(reinterpret_cast<const char*>(merkle_root), 32)
             .append(reinterpret_cast<const char*>(&time), 4)
+            .append(reinterpret_cast<const char*>(merkle_root), 32)
             .append(reinterpret_cast<const char*>(&nbits), 4)
             .append(reinterpret_cast<const char*>(&nonce), 4);
     cout << "header_length: " << header.length() << endl;
