@@ -7,6 +7,9 @@
 #include <vector>
 #include <string>
 #include <array>
+#include <sstream>
+#include <iomanip>
+
 
 #include "sha256Constants.hpp"
 
@@ -56,8 +59,8 @@ string sha256(string s) {
     int size = b.size();
     int numBlocks = size / BLOCK_SIZE;
     int start = 0;
-    array<uint32_t, 8>* hash_ptr = new array<uint32_t, 8>;
-    array<uint32_t, 8>& hash = *hash_ptr;
+    array<uint32_t, 8> hash;
+    array<uint32_t, 8>* hash_ptr = &hash;
     array<uint32_t, 8> prev_hash = INIT_HASH_VALUES;
     for (int i = 0; i < 8; i++) {
         hash[i] = INIT_HASH_VALUES[i];
@@ -117,15 +120,13 @@ string sha256(string s) {
     // for (int i = 0; i < 8; i++) {
     //     cout << bitset<32>(hash[i]).to_string();
     // }
-    result.reserve(32); 
+    result.reserve(32);
     for (int i = 0; i < 8; i++) {
-        uint32_t value = hash[i];
-        result += static_cast<char>((value >> 24) & 0xFF);  // 1st byte (least significant)
-        result += static_cast<char>((value >> 16) & 0xFF);  // 2nd byte
-        result += static_cast<char>((value >> 8) & 0xFF); // 3rd byte
-        result += static_cast<char>((value >> 0) & 0xFF); // 4th byte (most significant)
+        result += static_cast<char>((hash[i] >> 24) & 0xFF);
+        result += static_cast<char>((hash[i] >> 16) & 0xFF);
+        result += static_cast<char>((hash[i] >> 8) & 0xFF);
+        result += static_cast<char>((hash[i] >> 0) & 0xFF);
     }
-    
     return result;
 }
 
@@ -135,7 +136,7 @@ string sha256(string s) {
 //     cout << "Enter a string: ";
 //     cin >> s;
 //     string str = sha256(s);
-//     cout << str;
+//     cout << str << endl;
 //     return 0;
 // }
 
