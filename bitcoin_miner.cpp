@@ -4,8 +4,10 @@
 #include <string>
 #include <algorithm>
 #include <cstdint>
+#include <ctime>
 
 #include "sha256.cpp" // your SHA-256 implementation
+#include "blockchain_connection.hpp"
 
 using namespace std;
 
@@ -26,12 +28,35 @@ void appendLE(string& s, uint32_t val) {
 }
 
 int main() {
+    // Initialize HTTP client for blockchain connection
+    initializeHttpClient();
+    
+    // Get latest block information from the blockchain
+    BlockInfo latestBlock = getMiningInfo();
+    
+    if (latestBlock.hash.empty()) {
+        cerr << "Failed to get latest block information. Exiting." << endl;
+        cleanupHttpClient();
+        return 1;
+    }
+    
+    cout << "\n=== Starting Mining Process ===" << endl;
+    cout << "Mining next block after: " << latestBlock.hash << endl;
+    cout << "Block height: " << latestBlock.height + 1 << endl;
+    
     string header;
 
+    // Version (4 bytes, little-endian) - using version 1
     appendLE(header, 1);
 
-    header.append(32, '\0');
+    // Previous block hash (32 bytes, little-endian)
+    vector<uint8_t> prevHashBytes = hexStringToBytes(latestBlock.hash);
+    reverse(prevHashBytes.begin(), prevHashBytes.end());
+    for (uint8_t byte : prevHashBytes) {
+        header.push_back(static_cast<char>(byte));
+    }
 
+    // Merkle root (for now using a placeholder - in real mining, you'd calculate this from transactions)
     uint8_t merkle_root_be[32] = {
         0x4a, 0x5e, 0x1e, 0x4b, 0xaa, 0xb8, 0x9f, 0x3a,
         0x32, 0x51, 0x8a, 0x88, 0xc3, 0x1b, 0xc8, 0x7f,
@@ -41,21 +66,51 @@ int main() {
     for (int i = 31; i >= 0; --i)
         header.push_back(static_cast<char>(merkle_root_be[i]));
 
-    // Time
-    appendLE(header, 1231006505);
+    // Current timestamp
+    uint32_t currentTime = static_cast<uint32_t>(time(nullptr));
+    appendLE(header, currentTime);
 
-    // Bits
-    appendLE(header, 0x1d00ffff);
+    // Bits (difficulty target) - use current network difficulty
+    appendLE(header, latestBlock.bits);
 
-    // Nonce
-    appendLE(header, 2083236893); // 0x7c2bac1d
+    // Mining loop - try different nonces
+    cout << "\nStarting mining with current difficulty..." << endl;
+    uint32_t nonce = 0;
+    bool found = false;
+    
+    while (!found && nonce < 1000000) { // Limit iterations for demo
+        string currentHeader = header;
+        appendLE(currentHeader, nonce);
+        
+        string hash = doubleSHA256(currentHeader);
+        reverse(hash.begin(), hash.end());
+        
+        // Check if hash meets difficulty target (simplified check - just look for leading zeros)
+        string hashHex = HexString(hash);
+        
+        if (nonce % 100000 == 0) {
+            cout << "Nonce: " << nonce << " Hash: " << hashHex << endl;
+        }
+        
+        // For demonstration, we'll consider any hash with 4+ leading zeros as "found"
+        // (Real Bitcoin mining requires much more leading zeros)
+        if (hashHex.substr(0, 4) == "0000") {
+            found = true;
+            cout << "\n=== BLOCK FOUND! ===" << endl;
+            cout << "Winning nonce: " << nonce << endl;
+            cout << "Block hash: " << hashHex << endl;
+            cout << "Header (hex): " << HexString(currentHeader) << endl;
+        }
+        
+        nonce++;
+    }
+    
+    if (!found) {
+        cout << "\nNo block found in " << nonce << " attempts." << endl;
+        cout << "In real mining, you would continue with more nonces or get new block template." << endl;
+    }
 
-    cout << "Header (hex): " << HexString(header) << endl;
-
-    string hash = doubleSHA256(header);
-
-    reverse(hash.begin(), hash.end());
-    cout << "Block Hash (hex): " << HexString(hash) << endl;
-
+    // Cleanup
+    cleanupHttpClient();
     return 0;
 }

@@ -27,12 +27,6 @@ uint32_t maj(array<uint32_t, 8>* hash);
 uint32_t rotateRight(uint32_t x, uint32_t n) {
     return (x >> n) | (x << (32 - n));
 }
-// block_header* pre_process(string s);
-// int main() {
-//     string s = "abc";
-//     block_header* bh = pre_process(s);
-//     return 0;
-// }
 
 string sha256(string s) {
     string b = "";
@@ -41,18 +35,14 @@ string sha256(string s) {
     int padding =
         ((BLOCK_SIZE - CHUNK_SIZE - 1) - bSize % BLOCK_SIZE + BLOCK_SIZE) %
         BLOCK_SIZE;
-    // cout << padding << endl;
 
     b.reserve(bSize + padding + CHUNK_SIZE);
     for (char ch : s) {
         b.append(bitset<8>(ch).to_string());
     }
-    // cout << b;
-    // cout << b << endl;
+
     b += '1';
-    // cout << b << endl;
     b.append(padding, '0');
-    // cout << b << endl;
     string lengthBits = bitset<CHUNK_SIZE>(bSize).to_string();
     b.append(lengthBits);
 
@@ -131,14 +121,14 @@ string sha256(string s) {
 }
 
 
-// int main() {
-//     string s;
-//     cout << "Enter a string: ";
-//     cin >> s;
-//     string str = sha256(s);
-//     cout << str << endl;
-//     return 0;
-// }
+int main() {
+    string s;
+    cout << "Enter a string: ";
+    cin >> s;
+    string str = sha256(s);
+    cout << str << endl;
+    return 0;
+}
 
 uint32_t sigma0(uint32_t x) { return rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >> 3); }
 uint32_t sigma1(uint32_t x) { return rotateRight(x, 17) ^ rotateRight(x, 19) ^ (x >> 10); }
