@@ -56,7 +56,7 @@ int main() {
         header.push_back(static_cast<char>(byte));
     }
 
-    // Merkle root (for now using a placeholder - in real mining, you'd calculate this from transactions)
+    // Merkle root (for now using a placeholder)
     uint8_t merkle_root_be[32] = {
         0x4a, 0x5e, 0x1e, 0x4b, 0xaa, 0xb8, 0x9f, 0x3a,
         0x32, 0x51, 0x8a, 0x88, 0xc3, 0x1b, 0xc8, 0x7f,
@@ -66,14 +66,11 @@ int main() {
     for (int i = 31; i >= 0; --i)
         header.push_back(static_cast<char>(merkle_root_be[i]));
 
-    // Current timestamp
     uint32_t currentTime = static_cast<uint32_t>(time(nullptr));
     appendLE(header, currentTime);
 
-    // Bits (difficulty target) - use current network difficulty
     appendLE(header, latestBlock.bits);
 
-    // Mining loop - try different nonces
     cout << "\nStarting mining with current difficulty..." << endl;
     uint32_t nonce = 0;
     bool found = false;

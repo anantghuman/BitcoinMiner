@@ -121,14 +121,14 @@ string sha256(string s) {
 }
 
 
-int main() {
-    string s;
-    cout << "Enter a string: ";
-    cin >> s;
-    string str = sha256(s);
-    cout << str << endl;
-    return 0;
-}
+// int main() {
+//     string s;
+//     cout << "Enter a string: ";
+//     cin >> s;
+//     string str = sha256(s);
+//     cout << str << endl;
+//     return 0;
+// }
 
 uint32_t sigma0(uint32_t x) { return rotateRight(x, 7) ^ rotateRight(x, 18) ^ (x >> 3); }
 uint32_t sigma1(uint32_t x) { return rotateRight(x, 17) ^ rotateRight(x, 19) ^ (x >> 10); }
