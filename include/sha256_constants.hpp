@@ -1,24 +1,24 @@
-#ifndef SHA256_CONSTANTS_H
-#define SHA256_CONSTANTS_H
+#pragma once
 
 #include <array>
 #include <cstdint>
 
-// Size constants
-constexpr uint32_t BLOCK_SIZE = 512;     // Size of each block in bits
-constexpr uint32_t CHUNK_SIZE = 64;      // Size of each block in bytes
-constexpr uint32_t HASH_SIZE = 256;      // Size of the final hash in bits
-constexpr uint32_t LENGTH_FIELD_SIZE = 64; // Length field size in bits
+// SHA-256 block size in bytes (512 bits).
+constexpr std::size_t SHA256_BLOCK_BYTES  = 64;
 
-// Initial Hash Values (H)
-constexpr std::array<uint32_t, 8> INIT_HASH_VALUES = {
-    0x6a09e667, 0xbb67ae85,
-    0x3c6ef372, 0xa54ff53a,
-    0x510e527f, 0x9b05688c,
-    0x1f83d9ab, 0x5be0cd19
+// SHA-256 digest size in bytes (256 bits).
+constexpr std::size_t SHA256_DIGEST_BYTES = 32;
+
+// Initial hash values H0–H7.
+// Source: first 32 bits of the fractional parts of sqrt(2), sqrt(3), ..., sqrt(19).
+constexpr std::array<uint32_t, 8> SHA256_INIT = {
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+    0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 };
 
-constexpr std::array<uint32_t, 64> K = {
+// Round constants K[0..63].
+// Source: first 32 bits of the fractional parts of cbrt of the first 64 primes.
+constexpr std::array<uint32_t, 64> SHA256_K = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
     0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
@@ -36,5 +36,3 @@ constexpr std::array<uint32_t, 64> K = {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
     0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
 };
-
-#endif // SHA256_CONSTANTS_H

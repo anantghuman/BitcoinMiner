@@ -1,0 +1,12 @@
+# Build output
+build/
+bitcoin_miner
+
+# macOS metadata
+.DS_Store
+
+# IDE configuration
+.vscode/
+
+# Legacy object files (pre-refactor, safe to delete manually)
+*.o

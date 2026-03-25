@@ -1,34 +1,26 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2
-LIBS = -lcurl
+CXX      = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -Iinclude -Ithird_party
+LIBS     = -lcurl
 
-# Source files
-SOURCES = bitcoin_miner.cpp blockchain_connection.cpp
-OBJECTS = $(SOURCES:.cpp=.o)
+SRCS   = src/main.cpp src/blockchain.cpp src/sha256.cpp
+OBJS   = $(patsubst src/%.cpp, build/%.o, $(SRCS))
 TARGET = bitcoin_miner
 
-# Default target
+.PHONY: all clean run
+
 all: $(TARGET)
 
-# Build the main executable
-$(TARGET): $(OBJECTS)
-	$(CXX) $(OBJECTS) -o $(TARGET) $(LIBS)
+$(TARGET): $(OBJS)
+	$(CXX) $^ -o $@ $(LIBS)
 
-# Compile object files
-%.o: %.cpp
+build/%.o: src/%.cpp | build
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Clean build artifacts
+build:
+	mkdir -p build
+
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -rf build $(TARGET)
 
-# Install dependencies (macOS with Homebrew)
-install-deps:
-	@echo "Installing dependencies with Homebrew..."
-	brew install curl jsoncpp
-
-# Run the miner
-run: $(TARGET)
+run: all
 	./$(TARGET)
-
-.PHONY: all clean install-deps run
