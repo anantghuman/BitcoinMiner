@@ -1,6 +1,6 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2
-LIBS = -lcurl -ljsoncpp
+LIBS = -lcurl
 
 # Source files
 SOURCES = bitcoin_miner.cpp blockchain_connection.cpp
