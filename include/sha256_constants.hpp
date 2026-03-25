@@ -3,21 +3,16 @@
 #include <array>
 #include <cstdint>
 
-// SHA-256 block size in bytes (512 bits).
 constexpr std::size_t SHA256_BLOCK_BYTES  = 64;
-
-// SHA-256 digest size in bytes (256 bits).
 constexpr std::size_t SHA256_DIGEST_BYTES = 32;
 
-// Initial hash values H0–H7.
-// Source: first 32 bits of the fractional parts of sqrt(2), sqrt(3), ..., sqrt(19).
+// Initial hash values: first 32 bits of frac(sqrt(p)) for primes p = 2..19.
 constexpr std::array<uint32_t, 8> SHA256_INIT = {
     0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
     0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
 };
 
-// Round constants K[0..63].
-// Source: first 32 bits of the fractional parts of cbrt of the first 64 primes.
+// Round constants: first 32 bits of frac(cbrt(p)) for the first 64 primes.
 constexpr std::array<uint32_t, 64> SHA256_K = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
     0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
