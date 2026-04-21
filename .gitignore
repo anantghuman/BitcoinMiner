@@ -10,3 +10,5 @@ bitcoin_miner
 
 # Legacy object files (pre-refactor, safe to delete manually)
 *.o
+
+CLAUDE.md

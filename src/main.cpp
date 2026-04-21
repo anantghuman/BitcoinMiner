@@ -1,25 +1,25 @@
 #include "blockchain.hpp"
-#include "sha256.hpp"
+#ifdef USE_GPU
+#include "miner_gpu.hpp"
+#else
+#include "miner.hpp"
+#endif
 
 #include <algorithm>
 #include <array>
-#include <climits>
 #include <cstdint>
 #include <ctime>
+#include <thread>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
 #include <vector>
 
-static std::string doubleSHA256(const std::string& data) {
-    return sha256(sha256(data));
-}
-
-static std::string toHex(const std::string& bytes) {
+static std::string toHex(const std::array<uint8_t, 32>& bytes) {
     std::ostringstream oss;
-    for (unsigned char c : bytes)
-        oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(c);
+    for (uint8_t b : bytes)
+        oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(b);
     return oss.str();
 }
 
@@ -63,26 +63,6 @@ static std::array<uint8_t, 32> expandTarget(uint32_t nBits) {
     return target;
 }
 
-// hash is the byte-reversed (display-form) digest; comparison is big-endian.
-static bool meetsTarget(const std::string& hash,
-                        const std::array<uint8_t, 32>& target) {
-    for (std::size_t i = 0; i < 32; ++i) {
-        const auto h = static_cast<uint8_t>(hash[i]);
-        if (h < target[i]) return true;
-        if (h > target[i]) return false;
-    }
-    return false;
-}
-
-static int leadingZeroBytes(const std::string& hashHex) {
-    int count = 0;
-    for (std::size_t i = 0; i + 1 < hashHex.size(); i += 2) {
-        if (hashHex[i] == '0' && hashHex[i + 1] == '0') ++count;
-        else break;
-    }
-    return count;
-}
-
 int main() {
     initializeHttpClient();
 
@@ -106,47 +86,34 @@ int main() {
     std::cout << "...\n" << std::dec;
 
     const std::string prefix = buildHeaderPrefix(tip);
-
-    constexpr uint64_t NONCE_COUNT = static_cast<uint64_t>(UINT32_MAX) + 1;
-    std::cout << "\nSearching " << NONCE_COUNT << " nonces...\n\n";
-
-    int  bestZeros = 0;
-    bool found     = false;
-
-    for (uint64_t nonce = 0; nonce < NONCE_COUNT; ++nonce) {
-        std::string header = prefix;
-        appendLE32(header, static_cast<uint32_t>(nonce));
-
-        // Double-SHA256, then byte-reverse to get the display-form digest.
-        std::string hash = doubleSHA256(header);
-        std::reverse(hash.begin(), hash.end());
-
-        if (meetsTarget(hash, target)) {
-            found = true;
-            std::cout << "\n=== BLOCK FOUND ===\n"
-                      << "Nonce : " << nonce       << '\n'
-                      << "Hash  : " << toHex(hash) << '\n';
-            break;
-        }
-
-        const std::string hashHex = toHex(hash);
-        const int zeros = leadingZeroBytes(hashHex);
-        if (zeros > bestZeros) {
-            bestZeros = zeros;
-            std::cout << "New best  nonce=" << std::setw(10) << std::dec << nonce
-                      << "  leading-zero-bytes=" << zeros
-                      << "  " << hashHex.substr(0, 24) << "...\n";
-        }
-
-        if (nonce % 1'000'000 == 0 && nonce > 0)
-            std::cout << std::dec << nonce / 1'000'000
-                      << "M nonces checked, best leading zeros: " << bestZeros << '\n';
-    }
-
-    if (!found)
-        std::cout << "\nExhausted all " << NONCE_COUNT << " nonces. No block found.\n"
-                  << "Expected: real Bitcoin requires ASIC hardware.\n";
+#ifdef USE_GPU
+    std::cout << "\nStarting GPU mining...\n\n";
+#else
+    std::cout << "\nStarting mining with " << std::thread::hardware_concurrency()
+              << " threads...\n\n";
+#endif
 
     cleanupHttpClient();
+
+#ifdef USE_GPU
+    const MineResult result = mineGPU(prefix, target);
+#else
+    const MineResult result = mine(prefix, target);
+#endif
+
+    std::cout << "\n--- Results ---\n"
+              << std::fixed << std::setprecision(2)
+              << "Hashes checked : " << result.hashesChecked << "\n"
+              << "Throughput     : " << result.hashesPerSecond / 1e6 << " MH/s\n";
+
+    if (result.found) {
+        std::cout << "\n=== BLOCK FOUND ===\n"
+                  << "Nonce : " << result.nonce << "\n"
+                  << "Hash  : " << toHex(result.displayHash) << "\n";
+    } else {
+        std::cout << "Exhausted all 2^32 nonces. No block found.\n"
+                  << "Real Bitcoin requires ASIC hardware.\n";
+    }
+
     return 0;
 }
