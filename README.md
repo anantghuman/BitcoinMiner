@@ -1,28 +1,34 @@
 # Bitcoin Miner in C++
 
-An educational CPU-based Bitcoin miner written in C++ that connects to the live Bitcoin network, fetches the current chain tip, and attempts to mine the next block.
+An educational CPU and multi-GPU Bitcoin miner written in C++ and CUDA that connects to the live Bitcoin network, fetches the current chain tip, and attempts to mine the next block.
 
 ## Features
 
 - **Blockstream.info API**: Fetches real-time chain tip data (no API key required)
-- **Multi-threaded mining**: Splits the nonce space across all available CPU cores using `std::thread`
+- **Multi-threaded CPU mining**: Splits the nonce space across all available CPU cores using `std::thread`
+- **Multi-GPU CUDA mining**: Scales dynamically across all detected NVIDIA GPUs (or a user-selected subset via `--gpus`) using an atomic work queue
 - **SHA-256 midstate optimization**: Precomputes the SHA-256 state after the first 64 bytes of the header (constant across all nonces), halving compression work per hash
 - **Correct Bitcoin header serialization**: `prevHash` and `merkleRoot` byte-reversed to wire format; nBits expanded to 32-byte big-endian target
-- **Live progress reporting**: Prints hash rate and total hashes checked every 5 seconds
+- **Live progress reporting**: Prints aggregate and per-GPU hash rate and total hashes checked every 5 seconds
 
 ## Project Structure
 
 ```
 include/
-  miner.hpp               — MineResult struct + CPU mine() declaration
-  miner_gpu.hpp           — GPU mineGPU() declaration (reuses MineResult)
+  miner.hpp               — MineResult / GpuDeviceStats structs + CPU mine() declaration
+  miner_gpu.hpp           — GPU mineGPU() and printGpuDevices() declarations
+  work_queue.hpp          — Thread-safe dynamic batch scheduler + GPU ID resolver
+  cli.hpp                 — CLI option parsing declarations
   blockchain.hpp          — BlockInfo struct + API declarations
   sha256_constants.hpp    — SHA-256 init values and round constants
 src/
   miner_cpu.cpp           — SHA-256 implementation + multi-threaded CPU mining loop
-  miner_gpu.cu            — CUDA SHA-256 kernel + GPU mining loop
+  miner_gpu.cu            — CUDA SHA-256 kernel + multi-GPU mining coordinator
+  cli.cpp                 — Command-line option parser (--gpus, --list-gpus, --help)
   blockchain.cpp          — Blockstream.info API client
   main.cpp                — Header serialization, target expansion, entry point
+tests/
+  test_multi_gpu.cpp      — Host-side unit tests for scheduler, device selection, and CLI
 third_party/
   json.hpp                — nlohmann/json v3.11.3 (vendored, no install needed)
 build/                    — object files (git-ignored, created by make)
@@ -58,9 +64,14 @@ cd BitcoinMiner
 make              # outputs ./bitcoin_miner
 make run          # build + run
 
-# ── GPU build (requires CUDA Toolkit + NVIDIA GPU) ───────────────────────────
-make GPU=1        # outputs ./bitcoin_miner_gpu
-make run GPU=1    # build + run
+# ── GPU build (requires CUDA Toolkit + NVIDIA GPU(s)) ────────────────────────
+make GPU=1                    # outputs ./bitcoin_miner_gpu (uses all detected GPUs)
+make run GPU=1                # build + run on all GPUs
+./bitcoin_miner_gpu --list-gpus     # list detected CUDA GPUs
+./bitcoin_miner_gpu --gpus 0,1      # mine on specific GPU device IDs
+
+# ── Host-side unit tests ─────────────────────────────────────────────────────
+make test
 
 # ── Clean all build artifacts ─────────────────────────────────────────────────
 make clean
@@ -98,7 +109,7 @@ Constructs the constant portion of the 80-byte Bitcoin block header:
 
 The 4-byte nonce is appended per iteration in the mining loop.
 
-### 3. Mining (CPU or GPU)
+### 3. Mining (CPU or Multi-GPU)
 
 **CPU (`src/miner_cpu.cpp`):**
 - Nonce space `[0, 2³²)` is divided evenly across all CPU threads (`std::thread::hardware_concurrency()`)
@@ -106,13 +117,13 @@ The 4-byte nonce is appended per iteration in the mining loop.
 - **Midstate optimization**: The first 64 bytes of the header are constant — their SHA-256 compression is computed once and reused across all `2³²` nonce iterations
 - Progress printed every 5 seconds: elapsed time, total hashes, MH/s
 
-**GPU (`src/miner_gpu.cu`):**
-- Nonce space is split into 512 batches of 8M nonces (`2²³`) each
+**Multi-GPU (`src/miner_gpu.cu`):**
+- Spawns one host worker thread per selected CUDA GPU (`cudaSetDevice(id)` + dedicated non-blocking `cudaStream_t`)
+- Nonce space `[0, 2³²)` is split into 512 batches of 8M nonces (`2²³`) each and claimed dynamically via `NonceBatchScheduler`, automatically load-balancing heterogeneous GPUs
 - Each batch launches `32768 blocks × 256 threads` — every thread owns exactly one nonce
-- SHA-256 constants, midstate, tail bytes, and target are stored in CUDA `__constant__` memory, which is broadcast-cached to all threads in a warp
-- `atomicCAS` safely records the winning nonce if multiple threads find a valid hash simultaneously
-- The SHA-256 compression loop is fully unrolled via `#pragma unroll` for maximum ILP on GPU
-- Progress printed after each batch that crosses a 5-second boundary
+- SHA-256 constants, midstate, tail bytes, and target are uploaded per device into CUDA `__constant__` memory
+- `atomicCAS` safely records the winning nonce on a GPU; the winning worker notifies `NonceBatchScheduler` to stop all other GPUs after their in-flight batch
+- Progress printed every 5 seconds with aggregate and per-GPU MH/s, followed by a per-GPU breakdown at completion
 
 ### 4. Difficulty Check
 `SHA-256²(header)` is byte-reversed to produce the Bitcoin display-form digest, then compared lexicographically against the 32-byte target expanded from `nBits`.
@@ -142,32 +153,35 @@ Real Bitcoin requires ASIC hardware.
 
 ```cpp
 #include "miner.hpp"
+#include "miner_gpu.hpp"
 
-// Searches all 2^32 nonces across all CPU threads.
+// Searches all 2^32 nonces across all CPU threads, or across selected CUDA GPUs.
 // headerPrefix: 76-byte constant header (version + prevHash + merkleRoot + timestamp + bits)
 // target:       32-byte big-endian limit from expandTarget(nBits)
-MineResult result = mine(headerPrefix, target);
+MineResult cpuResult = mine(headerPrefix, target);
+MineResult gpuResult = mineGPU(headerPrefix, target);            // all detected GPUs
+MineResult subResult = mineGPU(headerPrefix, target, {0, 1});    // specific GPUs
 
 // MineResult fields:
-result.found           // bool — true if a valid nonce was found
-result.nonce           // uint32_t — the winning nonce
-result.displayHash     // std::array<uint8_t,32> — byte-reversed digest (display form)
-result.hashesChecked   // uint64_t — total hashes computed
-result.hashesPerSecond // double — average throughput
+gpuResult.found           // bool — true if a valid nonce was found
+gpuResult.nonce           // uint32_t — the winning nonce
+gpuResult.displayHash     // std::array<uint8_t,32> — byte-reversed digest (display form)
+gpuResult.hashesChecked   // uint64_t — total hashes computed
+gpuResult.hashesPerSecond // double — average aggregate throughput
+gpuResult.gpuStats        // std::vector<GpuDeviceStats> — per-GPU stats (GPU builds)
 ```
 
 ## Known Limitations
 
 - Merkle root is taken from the fetched tip block, not constructed from new transactions
-- Real Bitcoin difficulty (as of 2026) requires ~9 leading zero bytes; even a GPU will exhaust all 2³² nonces without finding a valid block
+- Real Bitcoin difficulty (as of 2026) requires ~9 leading zero bytes; even multiple GPUs will exhaust all 2³² nonces without finding a valid block
 - Single machine only; no pool protocol (Stratum) support
-- GPU build targets a single device (device 0); multi-GPU is not supported
 
 ## Important Notes
 
 **Educational Purpose**: This is a simplified Bitcoin miner for educational purposes. Real Bitcoin mining requires specialized ASIC hardware, mining pool participation, and significant energy resources.
 
-**Network Compliance**: This miner fetches real blockchain data but mining solo with a CPU is not economically viable on the main Bitcoin network.
+**Network Compliance**: This miner fetches real blockchain data but mining solo with a CPU or GPU is not economically viable on the main Bitcoin network.
 
 ## Troubleshooting
 

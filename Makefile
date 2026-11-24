@@ -11,14 +11,14 @@ GPU ?= 0
 
 ifeq ($(GPU), 1)
 CXXFLAGS += -DUSE_GPU
-SRCS      = src/main.cpp src/blockchain.cpp
+SRCS      = src/main.cpp src/blockchain.cpp src/cli.cpp
 OBJS      = $(patsubst src/%.cpp, build/%.o, $(SRCS))
 CUDA_OBJ  = build/miner_gpu.o
 TARGET    = bitcoin_miner_gpu
 LINK      = $(NVCC)
 LINK_LIBS = $(LIBS) -lcudart
 else
-SRCS      = src/main.cpp src/blockchain.cpp src/miner_cpu.cpp
+SRCS      = src/main.cpp src/blockchain.cpp src/miner_cpu.cpp src/cli.cpp
 OBJS      = $(patsubst src/%.cpp, build/%.o, $(SRCS))
 CUDA_OBJ  =
 TARGET    = bitcoin_miner
@@ -26,7 +26,10 @@ LINK      = $(CXX)
 LINK_LIBS = $(LIBS)
 endif
 
-.PHONY: all clean run
+TEST_SRCS = tests/test_multi_gpu.cpp src/cli.cpp
+TEST_BIN  = build/test_multi_gpu
+
+.PHONY: all clean run test
 
 all: $(TARGET)
 
@@ -41,6 +44,10 @@ build/miner_gpu.o: src/miner_gpu.cu | build
 
 build:
 	mkdir -p build
+
+test: $(TEST_SRCS) | build
+	$(CXX) -std=c++17 -Wall -Wextra -O2 -Iinclude $(TEST_SRCS) -lpthread -o $(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
 	rm -rf build bitcoin_miner bitcoin_miner_gpu

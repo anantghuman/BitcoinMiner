@@ -5,9 +5,18 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
-// GPU (CUDA) equivalent of mine().
-// Same interface as the CPU version: headerPrefix is 76 bytes, target is the
-// 32-byte big-endian limit from expandTarget(nBits).
+// Prints all detected CUDA-capable GPUs and their basic properties.
+void printGpuDevices();
+
+// GPU (CUDA) equivalent of mine(), scaled across the specified CUDA devices.
+// Passing an empty deviceIds vector uses all detected GPUs.
 MineResult mineGPU(const std::string& headerPrefix,
-                   const std::array<uint8_t, 32>& target);
+                   const std::array<uint8_t, 32>& target,
+                   const std::vector<int>& deviceIds);
+
+inline MineResult mineGPU(const std::string& headerPrefix,
+                          const std::array<uint8_t, 32>& target) {
+    return mineGPU(headerPrefix, target, {});
+}

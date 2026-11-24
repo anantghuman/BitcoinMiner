@@ -1,14 +1,22 @@
 #include "miner_gpu.hpp"
 #include "sha256_constants.hpp"
+#include "work_queue.hpp"
 
 #include <cuda_runtime.h>
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <exception>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
+#include <vector>
 
 // ── CUDA error helper ─────────────────────────────────────────────────────────
 
@@ -21,7 +29,8 @@
     } while (0)
 
 // ── Device constant memory ────────────────────────────────────────────────────
-// Uploaded once before the mining loop; broadcast-cached to all threads in a warp.
+// Constant memory is instantiated per CUDA device; each worker thread uploads
+// these symbols to its own active device after cudaSetDevice().
 
 __device__ __constant__ uint32_t d_K[64];          // SHA-256 round constants
 __device__ __constant__ uint32_t d_INIT[8];        // SHA-256 initial hash values
@@ -66,7 +75,7 @@ __device__ void sha256Compress(uint32_t h[8], const uint8_t blk[64]) noexcept {
     h[4]+=e; h[5]+=f; h[6]+=g; h[7]+=hh;
 }
 
-// Computes SHA-256²(header) for a given nonce, starting from the precomputed midstate.
+// Computes SHA-256^2(header) for a given nonce, starting from the precomputed midstate.
 // out[32] receives the raw (non-byte-reversed) double-SHA-256 digest.
 __device__ void doubleSHA256(uint32_t nonce, uint8_t out[32]) noexcept {
     // ---- First SHA-256: second (and final) 64-byte block of the 80-byte header ----
@@ -134,7 +143,7 @@ __global__ void mineKernel(uint32_t nonceStart, uint32_t* d_foundNonce, int* d_f
     }
 }
 
-// ── Host-side SHA-256 (mirrors device logic; used only to compute midstate) ───
+// ── Host-side SHA-256 & RAII CUDA helpers ─────────────────────────────────────
 
 namespace {
 
@@ -202,26 +211,93 @@ void hostDoubleSHA256(const uint32_t midstate[8], const uint8_t tail12[12],
     }
 }
 
+struct CudaDeviceResources {
+    int          deviceId{0};
+    cudaStream_t stream{nullptr};
+    int*         d_found{nullptr};
+    uint32_t*    d_foundNonce{nullptr};
+
+    explicit CudaDeviceResources(int devId) : deviceId(devId) {
+        CUDA_CHECK(cudaSetDevice(deviceId));
+        CUDA_CHECK(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
+        CUDA_CHECK(cudaMalloc(&d_found, sizeof(int)));
+        CUDA_CHECK(cudaMalloc(&d_foundNonce, sizeof(uint32_t)));
+        CUDA_CHECK(cudaMemsetAsync(d_found, 0, sizeof(int), stream));
+        CUDA_CHECK(cudaMemsetAsync(d_foundNonce, 0, sizeof(uint32_t), stream));
+        CUDA_CHECK(cudaStreamSynchronize(stream));
+    }
+
+    ~CudaDeviceResources() {
+        cudaSetDevice(deviceId);
+        if (d_foundNonce) cudaFree(d_foundNonce);
+        if (d_found)      cudaFree(d_found);
+        if (stream)       cudaStreamDestroy(stream);
+    }
+
+    CudaDeviceResources(const CudaDeviceResources&)            = delete;
+    CudaDeviceResources& operator=(const CudaDeviceResources&) = delete;
+};
+
+void uploadConstantsToActiveDevice(const uint32_t kHost[64],
+                                   const uint32_t initHost[8],
+                                   const uint32_t midstate[8],
+                                   const uint8_t  tail12[12],
+                                   const std::array<uint8_t, 32>& target) {
+    CUDA_CHECK(cudaMemcpyToSymbol(d_K,        kHost,         64 * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_INIT,     initHost,       8 * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_midstate, midstate,       8 * sizeof(uint32_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_tail12,   tail12,        12 * sizeof(uint8_t)));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_target,   target.data(), 32 * sizeof(uint8_t)));
+}
+
 } // namespace
 
 // ── Public interface ──────────────────────────────────────────────────────────
 
+void printGpuDevices() {
+    int deviceCount = 0;
+    CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
+    if (deviceCount == 0) {
+        std::cout << "No CUDA-capable GPUs detected.\n";
+        return;
+    }
+
+    std::cout << "Detected " << deviceCount << " CUDA GPU(s):\n";
+    for (int id = 0; id < deviceCount; ++id) {
+        cudaDeviceProp prop;
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, id));
+        std::cout << "  [" << id << "] " << prop.name
+                  << "  CC " << prop.major << '.' << prop.minor
+                  << "  SMs: " << prop.multiProcessorCount
+                  << "  VRAM: " << prop.totalGlobalMem / (1u << 20) << " MB\n";
+    }
+}
+
 MineResult mineGPU(const std::string& headerPrefix,
-                   const std::array<uint8_t, 32>& target) {
+                   const std::array<uint8_t, 32>& target,
+                   const std::vector<int>& deviceIds) {
     if (headerPrefix.size() != 76)
         throw std::runtime_error("headerPrefix must be exactly 76 bytes");
 
-    // ── Device selection ──────────────────────────────────────────────────────
+    // ── Device discovery & selection ──────────────────────────────────────────
     int deviceCount = 0;
     CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
-    if (deviceCount == 0)
-        throw std::runtime_error("No CUDA-capable GPU found.");
+    const std::vector<int> selectedDevices = resolveDeviceIds(deviceCount, deviceIds);
+    const std::size_t      numGpus         = selectedDevices.size();
 
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, 0));
-    std::cout << "GPU : " << prop.name
-              << "  SMs: "   << prop.multiProcessorCount
-              << "  VRAM: "  << prop.totalGlobalMem / (1u << 20) << " MB\n\n";
+    std::vector<GpuDeviceStats> gpuStats(numGpus);
+    std::cout << "Using " << numGpus << " GPU(s):\n";
+    for (std::size_t i = 0; i < numGpus; ++i) {
+        cudaDeviceProp prop;
+        CUDA_CHECK(cudaGetDeviceProperties(&prop, selectedDevices[i]));
+        gpuStats[i].deviceId = selectedDevices[i];
+        gpuStats[i].name     = prop.name;
+        gpuStats[i].smCount  = prop.multiProcessorCount;
+        std::cout << "  GPU " << selectedDevices[i] << ": " << prop.name
+                  << "  SMs: " << prop.multiProcessorCount
+                  << "  VRAM: " << prop.totalGlobalMem / (1u << 20) << " MB\n";
+    }
+    std::cout << '\n';
 
     // ── Compute midstate on CPU (first 64 bytes, constant across all nonces) ─
     const auto*    prefix = reinterpret_cast<const uint8_t*>(headerPrefix.data());
@@ -231,81 +307,137 @@ MineResult mineGPU(const std::string& headerPrefix,
     for (int i = 0; i < 8; ++i) midstate[i] = SHA256_INIT[i];
     hostCompress(midstate, prefix);
 
-    // ── Upload to device constant memory ──────────────────────────────────────
     uint32_t kHost[64], initHost[8];
-    for (int i = 0; i < 64; ++i) kHost[i]   = SHA256_K[i];
+    for (int i = 0; i < 64; ++i) kHost[i]    = SHA256_K[i];
     for (int i = 0;  i < 8; ++i) initHost[i] = SHA256_INIT[i];
 
-    CUDA_CHECK(cudaMemcpyToSymbol(d_K,        kHost,          64 * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_INIT,     initHost,        8 * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_midstate, midstate,        8 * sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_tail12,   tail12,         12 * sizeof(uint8_t)));
-    CUDA_CHECK(cudaMemcpyToSymbol(d_target,   target.data(),  32 * sizeof(uint8_t)));
+    // ── Multi-GPU dynamic batch scheduler ─────────────────────────────────────
+    constexpr int     BLOCK_SIZE = 256;
+    constexpr int64_t BATCH_SIZE = NonceBatchScheduler::DEFAULT_BATCH_SIZE;
+    constexpr int     GRID_SIZE  = static_cast<int>(BATCH_SIZE / BLOCK_SIZE);
 
-    // ── Allocate result buffers on device ─────────────────────────────────────
-    int*      d_found;
-    uint32_t* d_foundNonce;
-    CUDA_CHECK(cudaMalloc(&d_found,      sizeof(int)));
-    CUDA_CHECK(cudaMalloc(&d_foundNonce, sizeof(uint32_t)));
-    CUDA_CHECK(cudaMemset(d_found,      0, sizeof(int)));
-    CUDA_CHECK(cudaMemset(d_foundNonce, 0, sizeof(uint32_t)));
+    NonceBatchScheduler             scheduler(BATCH_SIZE);
+    std::vector<std::atomic<uint64_t>> perGpuHashes(numGpus);
+    for (auto& counter : perGpuHashes)
+        counter.store(0, std::memory_order_relaxed);
 
-    // ── Mining loop ───────────────────────────────────────────────────────────
-    // Nonce space [0, 2^32) is split into 512 batches of 2^23 = 8M nonces each.
-    // Each batch launches 32768 blocks × 256 threads = 8M threads simultaneously.
-    constexpr int     BLOCK_SIZE  = 256;
-    constexpr int64_t BATCH_SIZE  = int64_t(1) << 23;          // 8,388,608 nonces
-    constexpr int     GRID_SIZE   = int(BATCH_SIZE / BLOCK_SIZE); // 32,768 blocks
-    constexpr int64_t NUM_BATCHES = (int64_t(1) << 32) / BATCH_SIZE; // 512
+    std::vector<std::exception_ptr> workerErrors(numGpus);
+    std::atomic<std::size_t>        activeWorkers{numGpus};
+    std::mutex                      cvMutex;
+    std::condition_variable         cv;
 
     using Clock = std::chrono::steady_clock;
-    const auto startTime  = Clock::now();
-    double     lastReport = 0.0;
+    const auto startTime = Clock::now();
 
-    int64_t  totalHashes  = 0;
-    int      h_found      = 0;
-    uint32_t h_foundNonce = 0;
+    auto workerFn = [&](std::size_t idx) {
+        const int devId = selectedDevices[idx];
+        const auto workerStart = Clock::now();
+        try {
+            CudaDeviceResources res(devId);
+            uploadConstantsToActiveDevice(kHost, initHost, midstate, tail12, target);
 
-    for (int64_t batch = 0; batch < NUM_BATCHES && !h_found; ++batch) {
-        const uint32_t nonceStart = static_cast<uint32_t>(batch * BATCH_SIZE);
+            while (auto claim = scheduler.claimNextBatch()) {
+                mineKernel<<<GRID_SIZE, BLOCK_SIZE, 0, res.stream>>>(
+                    claim->nonceStart, res.d_foundNonce, res.d_found);
+                CUDA_CHECK(cudaGetLastError());
 
-        mineKernel<<<GRID_SIZE, BLOCK_SIZE>>>(nonceStart, d_foundNonce, d_found);
-        CUDA_CHECK(cudaGetLastError());
-        CUDA_CHECK(cudaDeviceSynchronize());
+                int h_found = 0;
+                CUDA_CHECK(cudaMemcpyAsync(&h_found, res.d_found, sizeof(int),
+                                           cudaMemcpyDeviceToHost, res.stream));
+                CUDA_CHECK(cudaStreamSynchronize(res.stream));
 
-        totalHashes += BATCH_SIZE;
+                perGpuHashes[idx].fetch_add(claim->count, std::memory_order_relaxed);
 
-        CUDA_CHECK(cudaMemcpy(&h_found, d_found, sizeof(int), cudaMemcpyDeviceToHost));
+                if (h_found) {
+                    uint32_t h_foundNonce = 0;
+                    CUDA_CHECK(cudaMemcpyAsync(&h_foundNonce, res.d_foundNonce, sizeof(uint32_t),
+                                               cudaMemcpyDeviceToHost, res.stream));
+                    CUDA_CHECK(cudaStreamSynchronize(res.stream));
+                    scheduler.markFound(h_foundNonce);
+                    break;
+                }
+            }
+        } catch (...) {
+            workerErrors[idx] = std::current_exception();
+            scheduler.abort();
+        }
 
-        const double elapsed = std::chrono::duration<double>(Clock::now() - startTime).count();
-        if (elapsed - lastReport >= 5.0) {
-            const double mhs = static_cast<double>(totalHashes) / elapsed / 1e6;
+        const double workerElapsed =
+            std::chrono::duration<double>(Clock::now() - workerStart).count();
+        const uint64_t hashes = perGpuHashes[idx].load(std::memory_order_relaxed);
+        gpuStats[idx].hashesChecked  = hashes;
+        gpuStats[idx].elapsedSeconds = workerElapsed;
+        gpuStats[idx].hashesPerSecond =
+            (workerElapsed > 0.0) ? static_cast<double>(hashes) / workerElapsed : 0.0;
+
+        if (activeWorkers.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+            std::lock_guard<std::mutex> lock(cvMutex);
+            cv.notify_all();
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(numGpus);
+    for (std::size_t i = 0; i < numGpus; ++i)
+        workers.emplace_back(workerFn, i);
+
+    // Report aggregate + per-GPU progress every 5 seconds until all workers finish.
+    {
+        std::unique_lock<std::mutex> lock(cvMutex);
+        while (activeWorkers.load(std::memory_order_acquire) > 0) {
+            const bool done = cv.wait_for(lock, std::chrono::seconds(5), [&]() {
+                return activeWorkers.load(std::memory_order_acquire) == 0;
+            });
+            if (done) break;
+
+            const double elapsed =
+                std::chrono::duration<double>(Clock::now() - startTime).count();
+            uint64_t totalHashes = 0;
+            std::ostringstream perGpuLine;
+            perGpuLine << std::fixed << std::setprecision(2);
+            for (std::size_t i = 0; i < numGpus; ++i) {
+                const uint64_t h = perGpuHashes[i].load(std::memory_order_relaxed);
+                totalHashes += h;
+                if (i > 0) perGpuLine << ", ";
+                perGpuLine << "GPU" << selectedDevices[i] << "="
+                           << (static_cast<double>(h) / elapsed / 1e6) << " MH/s";
+            }
+            const double totalMhs = static_cast<double>(totalHashes) / elapsed / 1e6;
             std::cout << std::fixed << std::setprecision(1) << elapsed << "s  "
                       << totalHashes / 1'000'000 << "M hashes  "
-                      << std::setprecision(2) << mhs << " MH/s\n";
-            lastReport = elapsed;
+                      << std::setprecision(2) << totalMhs << " MH/s"
+                      << "  [" << perGpuLine.str() << "]\n";
         }
     }
 
-    if (h_found)
-        CUDA_CHECK(cudaMemcpy(&h_foundNonce, d_foundNonce, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+    for (auto& t : workers)
+        t.join();
 
-    cudaFree(d_found);
-    cudaFree(d_foundNonce);
+    for (const auto& err : workerErrors) {
+        if (err) std::rethrow_exception(err);
+    }
 
-    const double totalElapsed = std::chrono::duration<double>(Clock::now() - startTime).count();
+    const double totalElapsed =
+        std::chrono::duration<double>(Clock::now() - startTime).count();
+
+    uint64_t totalHashes = 0;
+    for (const auto& s : gpuStats)
+        totalHashes += s.hashesChecked;
 
     MineResult result;
-    result.hashesChecked  = static_cast<uint64_t>(totalHashes);
-    result.hashesPerSecond = static_cast<double>(totalHashes) / totalElapsed;
+    result.hashesChecked   = totalHashes;
+    result.hashesPerSecond = (totalElapsed > 0.0)
+                                 ? static_cast<double>(totalHashes) / totalElapsed
+                                 : 0.0;
+    result.gpuStats        = std::move(gpuStats);
 
-    if (h_found) {
+    if (scheduler.isFound()) {
         result.found = true;
-        result.nonce = h_foundNonce;
+        result.nonce = scheduler.winningNonce();
 
         // Recompute display hash (byte-reversed digest) on CPU for the winning nonce.
         uint8_t digest[32];
-        hostDoubleSHA256(midstate, tail12, h_foundNonce, digest);
+        hostDoubleSHA256(midstate, tail12, result.nonce, digest);
         for (int i = 0; i < 32; ++i)
             result.displayHash[i] = digest[31 - i];
     }

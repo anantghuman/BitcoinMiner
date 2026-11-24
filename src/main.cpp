@@ -1,4 +1,5 @@
 #include "blockchain.hpp"
+#include "cli.hpp"
 #ifdef USE_GPU
 #include "miner_gpu.hpp"
 #else
@@ -9,11 +10,12 @@
 #include <array>
 #include <cstdint>
 #include <ctime>
-#include <thread>
+#include <exception>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 static std::string toHex(const std::array<uint8_t, 32>& bytes) {
@@ -63,7 +65,38 @@ static std::array<uint8_t, 32> expandTarget(uint32_t nBits) {
     return target;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+    CliOptions options;
+    try {
+        options = parseCliOptions(argc, argv);
+    } catch (const std::exception& ex) {
+        std::cerr << "Error: " << ex.what() << "\n\n";
+        printUsage(argv[0], std::cerr);
+        return 1;
+    }
+
+    if (options.showHelp) {
+        printUsage(argv[0], std::cout);
+        return 0;
+    }
+
+#ifdef USE_GPU
+    if (options.listGpus) {
+        try {
+            printGpuDevices();
+            return 0;
+        } catch (const std::exception& ex) {
+            std::cerr << "Error: " << ex.what() << "\n";
+            return 1;
+        }
+    }
+#else
+    if (options.listGpus || !options.gpuIds.empty()) {
+        std::cerr << "Error: --gpus and --list-gpus require the GPU build (make GPU=1).\n";
+        return 1;
+    }
+#endif
+
     initializeHttpClient();
 
     const BlockInfo tip = getMiningInfo();
@@ -95,16 +128,36 @@ int main() {
 
     cleanupHttpClient();
 
+    MineResult result;
+    try {
 #ifdef USE_GPU
-    const MineResult result = mineGPU(prefix, target);
+        result = mineGPU(prefix, target, options.gpuIds);
 #else
-    const MineResult result = mine(prefix, target);
+        result = mine(prefix, target);
 #endif
+    } catch (const std::exception& ex) {
+        std::cerr << "Mining failed: " << ex.what() << "\n";
+        return 1;
+    }
 
     std::cout << "\n--- Results ---\n"
               << std::fixed << std::setprecision(2)
               << "Hashes checked : " << result.hashesChecked << "\n"
               << "Throughput     : " << result.hashesPerSecond / 1e6 << " MH/s\n";
+
+    if (!result.gpuStats.empty()) {
+        std::cout << "\nPer-GPU Breakdown:\n";
+        for (const auto& gpu : result.gpuStats) {
+            const double sharePct = (result.hashesChecked > 0)
+                ? (100.0 * static_cast<double>(gpu.hashesChecked) /
+                   static_cast<double>(result.hashesChecked))
+                : 0.0;
+            std::cout << "  GPU " << gpu.deviceId << " (" << gpu.name << "): "
+                      << gpu.hashesChecked << " hashes ("
+                      << std::setprecision(1) << sharePct << "%), "
+                      << std::setprecision(2) << gpu.hashesPerSecond / 1e6 << " MH/s\n";
+        }
+    }
 
     if (result.found) {
         std::cout << "\n=== BLOCK FOUND ===\n"
